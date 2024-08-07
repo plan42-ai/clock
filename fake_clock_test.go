@@ -11,12 +11,14 @@ import (
 var theMostImportantDateEver = time.Date(1980, 8, 19, 0, 0, 0, 0, time.UTC)
 
 func TestAdvance(t *testing.T) {
+	t.Parallel()
 	c := clock.NewFakeClock(theMostImportantDateEver)
 	c.Advance(time.Hour * 24)
 	require.Equal(t, theMostImportantDateEver.Add(time.Hour*24), c.Now())
 }
 
 func TestTimer(t *testing.T) {
+	t.Parallel()
 	c := clock.NewFakeClock(theMostImportantDateEver)
 	timer := c.NewTimer(time.Hour * 25)
 	c.Advance(time.Hour * 24)
@@ -42,6 +44,7 @@ func ensureNotTriggered(t *testing.T, timer clock.Timer) {
 }
 
 func TestStop(t *testing.T) {
+	t.Parallel()
 	c := clock.NewFakeClock(theMostImportantDateEver)
 	timer := c.NewTimer(time.Hour)
 	stopped := timer.Stop()
@@ -51,6 +54,7 @@ func TestStop(t *testing.T) {
 }
 
 func TestReset(t *testing.T) {
+	t.Parallel()
 	c := clock.NewFakeClock(theMostImportantDateEver)
 	timer := c.NewTimer(time.Hour)
 	c.Advance(time.Hour * 2)
@@ -64,6 +68,7 @@ func TestReset(t *testing.T) {
 }
 
 func TestResetNegative(t *testing.T) {
+	t.Parallel()
 	c := clock.NewFakeClock(theMostImportantDateEver)
 	timer := c.NewTimer(time.Hour)
 	c.Advance(time.Hour * 2)
