@@ -1,6 +1,7 @@
 package clock_test
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,43 @@ func TestTimer(t *testing.T) {
 	ensureNotTriggered(t, timer)
 	c.Advance(time.Hour)
 	ensureTriggered(t, timer)
+}
+
+func TestAfterFunc(t *testing.T) {
+	t.Parallel()
+	c := clock.NewFakeClock(theMostImportantDateEver)
+	run := atomic.Bool{}
+	timer := c.AfterFunc(
+		time.Hour*25,
+		func() {
+			run.Store(true)
+		},
+	)
+	c.Advance(time.Hour * 24)
+	ensureNotTriggered(t, timer)
+	require.False(t, run.Load())
+	c.Advance(time.Hour)
+	timer.Stop()
+	time.Sleep(50 * time.Millisecond)
+	require.True(t, run.Load())
+}
+
+func TestAfterFuncCanceled(t *testing.T) {
+	t.Parallel()
+	c := clock.NewFakeClock(theMostImportantDateEver)
+	run := atomic.Bool{}
+	timer := c.AfterFunc(
+		time.Hour*25,
+		func() {
+			run.Store(true)
+		},
+	)
+	c.Advance(time.Hour * 24)
+	ensureNotTriggered(t, timer)
+	timer.Stop()
+	c.Advance(time.Hour)
+	time.Sleep(50 * time.Millisecond)
+	require.False(t, run.Load())
 }
 
 func ensureTriggered(t *testing.T, timer clock.Timer) {
