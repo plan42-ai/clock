@@ -11,6 +11,7 @@ import (
 type Clock interface {
 	Now() time.Time
 	NewTimer(d time.Duration) Timer
+	AfterFunc(d time.Duration, f func()) Timer
 }
 
 type Timer interface {
@@ -27,6 +28,10 @@ func (r RealClock) Now() time.Time {
 
 func (r RealClock) NewTimer(d time.Duration) Timer {
 	return RealTimer{Timer: time.NewTimer(d)}
+}
+
+func (r RealClock) AfterFunc(d time.Duration, f func()) Timer {
+	return RealTimer{Timer: time.AfterFunc(d, f)}
 }
 
 type RealTimer struct {
@@ -60,6 +65,7 @@ func (f *FakeClock) NewTimer(d time.Duration) Timer {
 	timer := &FakeTimer{
 		clock:   f,
 		c:       make(chan time.Time, 1),
+		cancel:  make(chan any),
 		trigger: f.now.Add(d),
 	}
 
@@ -69,6 +75,18 @@ func (f *FakeClock) NewTimer(d time.Duration) Timer {
 		f.pendingTimers = f.pendingTimers.Add(timer)
 	}
 
+	return timer
+}
+
+func (f *FakeClock) AfterFunc(d time.Duration, fn func()) Timer {
+	timer := f.NewTimer(d).(*FakeTimer)
+	go func() {
+		select {
+		case <-timer.c:
+			fn()
+		case <-timer.cancel:
+		}
+	}()
 	return timer
 }
 
@@ -90,6 +108,7 @@ func (f *FakeClock) Advance(d time.Duration) {
 type FakeTimer struct {
 	clock   *FakeClock
 	c       chan time.Time
+	cancel  chan any
 	trigger time.Time
 }
 
@@ -129,6 +148,7 @@ func (f *FakeTimer) Reset(d time.Duration) bool {
 func (f *FakeTimer) stop() bool {
 	if f.clock.pendingTimers.Contains(f) {
 		f.clock.pendingTimers = f.clock.pendingTimers.Remove(f)
+		close(f.cancel)
 		return true
 	}
 	return false
