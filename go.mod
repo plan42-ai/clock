@@ -1,4 +1,4 @@
-module github.com/agile-security/clock
+module github.com/debugging-sucks/clock
 
 go 1.22.5
 
