@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agile-security/clock"
+	"github.com/debugging-sucks/clock"
 	"github.com/stretchr/testify/require"
 )
 
