@@ -1,6 +1,7 @@
 package clock_test
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -143,4 +144,49 @@ func TestResetNegative(t *testing.T) {
 	reset := timer.Reset(-time.Hour * 4)
 	require.False(t, reset)
 	ensureTriggered(t, timer)
+}
+
+func TestTimeout(t *testing.T) {
+	t.Parallel()
+	c := clock.NewFakeClock(theMostImportantDateEver)
+	ctx, cancel := c.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c.Advance(time.Hour)
+
+	realTimeout, realCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer realCancel()
+
+	select {
+	case <-ctx.Done():
+		// Our fake timeout triggered after we advanced time in the fake clock
+		// Check to make sure the context reports the correct error.
+		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	case <-realTimeout.Done():
+		// 250 ms of real time elapsed, and our fake time context didn't respond to fake
+		// time being advanced. this means there's a bug in our implementation.
+		require.Fail(t, "test context did not timeout")
+	}
+}
+
+func TestParentCanceled(t *testing.T) {
+	t.Parallel()
+	c := clock.NewFakeClock(theMostImportantDateEver)
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	child, cancelChild := c.WithTimeout(parent, time.Hour)
+	defer cancelChild()
+	cancelParent()
+
+	realTimeout, realCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer realCancel()
+
+	select {
+	case <-child.Done():
+		// Our fake timeout was canceled after the parent context was canceled
+		require.ErrorIs(t, child.Err(), context.Canceled)
+	case <-realTimeout.Done():
+		// 250 ms of real time elapsed, and our fake time context didn't respond to the
+		// parent context being canceled. This means there's a big in our implementation.
+		require.Fail(t, "cancellation did not propagate from parent context to child context")
+	}
 }
