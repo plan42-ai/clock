@@ -1,6 +1,7 @@
 package clock
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,7 @@ type Clock interface {
 	Now() time.Time
 	NewTimer(d time.Duration) Timer
 	AfterFunc(d time.Duration, f func()) Timer
+	WithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc)
 }
 
 type Timer interface {
@@ -32,6 +34,10 @@ func (r RealClock) NewTimer(d time.Duration) Timer {
 
 func (r RealClock) AfterFunc(d time.Duration, f func()) Timer {
 	return RealTimer{Timer: time.AfterFunc(d, f)}
+}
+
+func (r RealClock) WithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, d)
 }
 
 type RealTimer struct {
@@ -75,6 +81,10 @@ func (f *FakeClock) NewTimer(d time.Duration) Timer {
 func (f *FakeClock) AfterFunc(d time.Duration, fn func()) Timer {
 	f.mux.Lock()
 	defer f.mux.Unlock()
+	return f.afterFunc(d, fn)
+}
+
+func (f *FakeClock) afterFunc(d time.Duration, fn func()) Timer {
 	ret := &FakeTimer{
 		clock:   f,
 		c:       nil,
@@ -106,6 +116,61 @@ func (f *FakeClock) addTimer(t *FakeTimer) Timer {
 		f.pendingTimers = f.pendingTimers.Add(t)
 	}
 	return t
+}
+
+func (f *FakeClock) WithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	ctx := &FakeDeadlineContext{
+		Context:  parent,
+		done:     make(chan struct{}),
+		deadline: f.now.Add(d),
+	}
+
+	// If the deadline is already in the past, mark the context as deadline exceeded.
+	if d <= 0 {
+		ctx.setErrorOnce(context.DeadlineExceeded)
+		return ctx, func() {
+			// already canceled
+		}
+	}
+
+	// if the parent is already done, propagate its completion.
+	select {
+	case <-parent.Done():
+		ctx.setErrorOnce(parent.Err())
+		return ctx, func() {
+			// already canceled}
+		}
+	default:
+	}
+
+	// otherwise create a fake timer that trigger's deadline exceeded when it fires
+	timer := f.afterFunc(
+		d, func() {
+			ctx.setErrorOnce(context.DeadlineExceeded)
+		},
+	)
+
+	// generate a proper cancel function
+	cancel := func() {
+		timer.Stop()
+		ctx.setErrorOnce(context.Canceled)
+	}
+
+	// and spin up a go routine that propagates cancellation from the parent context to the new context
+	go func() {
+		select {
+		case <-ctx.done:
+			return
+		case <-parent.Done():
+			timer.Stop()
+			ctx.setErrorOnce(parent.Err())
+		}
+	}()
+
+	// finally return the new context and the cancel function
+	return ctx, cancel
 }
 
 type FakeTimer struct {
@@ -159,6 +224,40 @@ func (f *FakeTimer) Less(rhs *FakeTimer) bool {
 		return false
 	}
 	return f.id < rhs.id
+}
+
+type FakeDeadlineContext struct {
+	context.Context
+	done     chan struct{}
+	err      atomic.Pointer[error]
+	deadline time.Time
+}
+
+func (ctx *FakeDeadlineContext) Deadline() (deadline time.Time, ok bool) {
+	parentDeadline, ok := ctx.Context.Deadline()
+	if ok && ctx.deadline.After(parentDeadline) {
+		return parentDeadline, true
+	}
+	return ctx.deadline, true
+}
+
+func (ctx *FakeDeadlineContext) Done() <-chan struct{} {
+	return ctx.done
+}
+
+func (ctx *FakeDeadlineContext) Err() error {
+	select {
+	case <-ctx.Done():
+		return *ctx.err.Load()
+	default:
+		return nil
+	}
+}
+
+func (ctx *FakeDeadlineContext) setErrorOnce(err error) {
+	if ctx.err.CompareAndSwap(nil, &err) {
+		close(ctx.done)
+	}
 }
 
 func NewFakeClock(now time.Time) *FakeClock {
