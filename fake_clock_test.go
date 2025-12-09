@@ -105,6 +105,35 @@ func TestReset(t *testing.T) {
 	ensureTriggered(t, timer)
 }
 
+func TestResetAfterFunc(t *testing.T) {
+	t.Parallel()
+	ch := make(chan struct{})
+	clk := clock.NewFakeClock(theMostImportantDateEver)
+	fakeTimer := clk.AfterFunc(
+		time.Second,
+		func() {
+			close(ch)
+		},
+	)
+	clk.Advance(time.Hour)
+	realTimer := time.NewTimer(time.Second)
+	select {
+	case <-ch:
+	case <-realTimer.C:
+		require.Fail(t, "after func didn't execute the first time")
+	}
+	realTimer.Reset(time.Second)
+	ch = make(chan struct{})
+	fakeTimer.Reset(time.Second)
+	clk.Advance(time.Hour)
+
+	select {
+	case <-ch:
+	case <-realTimer.C:
+		require.Fail(t, "after func didn't execute the second time")
+	}
+}
+
 func TestResetNegative(t *testing.T) {
 	t.Parallel()
 	c := clock.NewFakeClock(theMostImportantDateEver)

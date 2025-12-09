@@ -1,9 +1,8 @@
----
+version: "2"
 run:
   concurrency: 3
-
 linters:
-  disable-all: true
+  default: none
   enable:
     - asciicheck
     - dogsled
@@ -14,13 +13,10 @@ linters:
     - gocritic
     - gocyclo
     - godot
-    - gofmt
     - goheader
-    - goimports
     - gomodguard
     - goprintffuncname
     - gosec
-    - gosimple
     - govet
     - importas
     - ineffassign
@@ -33,10 +29,29 @@ linters:
     - promlinter
     - revive
     - staticcheck
-    - stylecheck
     - tparallel
-    - typecheck
     - unconvert
     - unparam
     - unused
     - whitespace
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

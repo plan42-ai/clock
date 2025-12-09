@@ -2,8 +2,8 @@ package clock
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/scottwis/persistent"
 )
@@ -50,6 +50,7 @@ type FakeClock struct {
 	mux           sync.Mutex
 	now           time.Time
 	pendingTimers *persistent.SetEx[*FakeTimer]
+	nextID        atomic.Int64
 }
 
 func (f *FakeClock) Now() time.Time {
@@ -62,38 +63,31 @@ func (f *FakeClock) NewTimer(d time.Duration) Timer {
 	f.mux.Lock()
 	defer f.mux.Unlock()
 
-	timer := &FakeTimer{
+	ret := &FakeTimer{
 		clock:   f,
 		c:       make(chan time.Time, 1),
-		cancel:  make(chan any),
 		trigger: f.now.Add(d),
+		id:      f.nextID.Add(1),
 	}
-
-	if timer.trigger.Before(f.now) {
-		timer.c <- timer.trigger
-	} else {
-		f.pendingTimers = f.pendingTimers.Add(timer)
-	}
-
-	return timer
+	return f.addTimer(ret)
 }
 
 func (f *FakeClock) AfterFunc(d time.Duration, fn func()) Timer {
-	timer := f.NewTimer(d).(*FakeTimer)
-	go func() {
-		select {
-		case <-timer.c:
-			fn()
-		case <-timer.cancel:
-		}
-	}()
-	return timer
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	ret := &FakeTimer{
+		clock:   f,
+		c:       nil,
+		fn:      fn,
+		trigger: f.now.Add(d),
+		id:      f.nextID.Add(1),
+	}
+	return f.addTimer(ret)
 }
 
 func (f *FakeClock) Advance(d time.Duration) {
 	f.mux.Lock()
 	defer f.mux.Unlock()
-
 	if d < 0 {
 		panic("time cannot move backwards")
 	}
@@ -101,31 +95,36 @@ func (f *FakeClock) Advance(d time.Duration) {
 
 	for timer, ok := f.pendingTimers.GetKthElement(0); ok && !timer.trigger.After(f.now); timer, ok = f.pendingTimers.GetKthElement(0) {
 		f.pendingTimers = f.pendingTimers.Remove(timer)
-		timer.c <- timer.trigger
+		timer.fire()
 	}
+}
+
+func (f *FakeClock) addTimer(t *FakeTimer) Timer {
+	if !t.trigger.After(f.now) {
+		t.fire()
+	} else {
+		f.pendingTimers = f.pendingTimers.Add(t)
+	}
+	return t
 }
 
 type FakeTimer struct {
 	clock   *FakeClock
 	c       chan time.Time
-	cancel  chan any
+	fn      func()
 	trigger time.Time
-}
-
-func (f *FakeTimer) Less(other *FakeTimer) bool {
-	if !f.trigger.Before(other.trigger) {
-		return false
-	}
-	if uintptr(unsafe.Pointer(f)) >= uintptr(unsafe.Pointer(other)) {
-		return false
-	}
-	return true
+	id      int64
 }
 
 func (f *FakeTimer) Stop() bool {
 	f.clock.mux.Lock()
 	defer f.clock.mux.Unlock()
-	return f.stop()
+
+	if f.clock.pendingTimers.Contains(f) {
+		f.clock.pendingTimers = f.clock.pendingTimers.Remove(f)
+		return true
+	}
+	return false
 }
 
 func (f *FakeTimer) C() <-chan time.Time {
@@ -135,23 +134,31 @@ func (f *FakeTimer) C() <-chan time.Time {
 func (f *FakeTimer) Reset(d time.Duration) bool {
 	f.clock.mux.Lock()
 	defer f.clock.mux.Unlock()
-	stopped := f.stop()
-	f.trigger = f.clock.now.Add(d)
-	if f.trigger.Before(f.clock.now) {
-		f.c <- f.trigger
-	} else {
-		f.clock.pendingTimers = f.clock.pendingTimers.Add(f)
+
+	ret := f.clock.pendingTimers.Contains(f)
+	if ret {
+		f.clock.pendingTimers = f.clock.pendingTimers.Remove(f)
 	}
-	return stopped
+	f.trigger = f.clock.now.Add(d)
+	f.clock.addTimer(f)
+	return ret
 }
 
-func (f *FakeTimer) stop() bool {
-	if f.clock.pendingTimers.Contains(f) {
-		f.clock.pendingTimers = f.clock.pendingTimers.Remove(f)
-		close(f.cancel)
+func (f *FakeTimer) fire() {
+	if f.fn != nil {
+		go f.fn()
+	} else {
+		f.c <- f.trigger
+	}
+}
+func (f *FakeTimer) Less(rhs *FakeTimer) bool {
+	if f.trigger.Before(rhs.trigger) {
 		return true
 	}
-	return false
+	if f.trigger.After(rhs.trigger) {
+		return false
+	}
+	return f.id < rhs.id
 }
 
 func NewFakeClock(now time.Time) *FakeClock {
