@@ -2,11 +2,68 @@ package clock
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/scottwis/persistent"
+)
+
+var timeLayouts = []string{
+	time.RFC3339,
+	time.RFC3339Nano,
+	"2006-01-02",
+	"2006/01/02",
+	"01-02-2006",
+	"01/02/2006",
+	"2006.01.02",
+	"01.02.2006",
+	"2006-01-02 15:04:05",
+	"2006-01-02 03:04:05 PM",
+	"2006-01-02 15:04:05 MST",
+	"2006-01-02 03:04:05 PM MST",
+	"2006-01-02 15:04:05 -0700",
+	"2006-01-02 03:04:05 PM -0700",
+	"2006-01-02 15:04:05Z07:00",
+	"2006-01-02 15:04:05.999999999Z07:00",
+	"2006/01/02 15:04:05 MST",
+	"2006/01/02 03:04:05 PM MST",
+	"2006/01/02 15:04:05 -0700",
+	"2006/01/02 03:04:05 PM -0700",
+	"2006/01/02 15:04:05Z07:00",
+	"2006/01/02 15:04:05.999999999Z07:00",
+	"2006.01.02 15:04:05",
+	"2006.01.02 03:04:05 PM",
+	"2006.01.02 15:04:05 MST",
+	"2006.01.02 03:04:05 PM MST",
+	"2006.01.02 15:04:05 -0700",
+	"2006.01.02 03:04:05 PM -0700",
+	"2006.01.02 15:04:05Z07:00",
+	"2006.01.02 15:04:05.999999999Z07:00",
+	"01-02-2006 15:04:05",
+	"01-02-2006 03:04:05 PM",
+	"01-02-2006 15:04:05 MST",
+	"01-02-2006 03:04:05 PM MST",
+	"01-02-2006 15:04:05 -0700",
+	"01-02-2006 03:04:05 PM -0700",
+	"01-02-2006 15:04:05Z07:00",
+	"01/02/2006 15:04:05",
+	"01/02/2006 03:04:05 PM",
+	"01/02/2006 15:04:05 MST",
+	"01/02/2006 03:04:05 PM MST",
+	"01/02/2006 15:04:05 -0700",
+	"01/02/2006 03:04:05 PM -0700",
+	"01/02/2006 15:04:05Z07:00",
+}
+
+const (
+	Day         = 24 * time.Hour
+	SimpleDate1 = "2006-01-02"
+	SimpleDate2 = "2026/01/02"
+	UsDate1     = "01-02-2006"
 )
 
 type Clock interface {
@@ -264,4 +321,68 @@ func NewFakeClock(now time.Time) *FakeClock {
 	return &FakeClock{
 		now: now,
 	}
+}
+
+func ParseDurationWithDays(value string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0, fmt.Errorf("duration is required")
+	}
+
+	sign := 1.0
+	if strings.HasPrefix(trimmed, "+") {
+		trimmed = trimmed[1:]
+	} else if strings.HasPrefix(trimmed, "-") {
+		sign = -1
+		trimmed = trimmed[1:]
+	}
+
+	if len(trimmed) < 2 {
+		return 0, fmt.Errorf("duration %q is missing units", value)
+	}
+
+	unit := trimmed[len(trimmed)-1]
+	number := trimmed[:len(trimmed)-1]
+	magnitude, err := strconv.ParseFloat(number, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	var base time.Duration
+	switch unit {
+	case 'd':
+		base = Day
+	case 'h':
+		base = time.Hour
+	case 'm':
+		base = time.Minute
+	case 's':
+		base = time.Second
+	default:
+		return 0, fmt.Errorf("invalid duration suffix %q", string(unit))
+	}
+
+	dur := time.Duration(sign * magnitude * float64(base))
+	return dur, nil
+}
+
+func ParseTimeOrRelativeDuration(value string, now time.Time) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, fmt.Errorf("time value is required")
+	}
+
+	for _, layout := range timeLayouts {
+		timestamp, err := time.Parse(layout, trimmed)
+		if err == nil {
+			return timestamp, nil
+		}
+	}
+
+	dur, durErr := ParseDurationWithDays(trimmed)
+	if durErr != nil {
+		return time.Time{}, fmt.Errorf("failed to parse %q as duration or RFC3339 time", value)
+	}
+
+	return now.Add(dur), nil
 }
